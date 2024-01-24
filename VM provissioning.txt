@@ -1,0 +1,191 @@
+locals {
+  resource_group_name = "App-Resource"
+  location = "North Europe"
+  virtual_network = {
+    name = "ADVNET01"
+    ad_space= "10.0.0.0/16"
+}
+
+subnet = [
+  {
+    name = "subnetA"
+    address_prefix = "10.0.1.0/24"
+  },
+
+    {
+    name = "subnetB"
+    address_prefix = "10.0.4.0/24"
+  }
+]
+  Az_tags = {
+    Environment = "Production"
+    Application-Name = "Netflix-India"
+    Application-ID = "211109098"
+    Business-Service = "Media"
+
+  }
+  
+}
+
+resource "azurerm_resource_group" "AzResourceGr" {
+  name = local.resource_group_name
+  location = local.location
+
+}
+
+resource "azurerm_virtual_network" "azvnet" {
+  name                = local.virtual_network.name
+  location            = azurerm_resource_group.AzResourceGr.location
+  resource_group_name = azurerm_resource_group.AzResourceGr.name
+  address_space       = [local.virtual_network.ad_space]
+
+  tags = local.Az_tags
+
+  depends_on = [ 
+    azurerm_resource_group.AzResourceGr ]
+
+}
+
+resource "azurerm_subnet" "az_subnet_A" {
+
+  name                 = local.subnet[0].name
+  resource_group_name  = local.resource_group_name
+  virtual_network_name = local.virtual_network.name
+  address_prefixes     = [local.subnet[0].address_prefix]
+  
+  depends_on = [ azurerm_virtual_network.azvnet ]
+}
+
+resource "azurerm_subnet" "az_subnet_B" {
+
+  name                 = local.subnet[1].name
+  resource_group_name  = local.resource_group_name
+  virtual_network_name = local.virtual_network.name
+  address_prefixes     = [local.subnet[1].address_prefix]
+  
+  depends_on = [ azurerm_virtual_network.azvnet ]
+}
+
+resource "azurerm_network_interface" "az_interface" {
+  name                = "azvm-nic-1"
+  location            = local.location
+  resource_group_name = local.resource_group_name
+
+  ip_configuration {
+    name                          = "ipconfig1"
+    subnet_id                     = azurerm_subnet.az_subnet_A.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id = azurerm_public_ip.az_pub_ip.id
+  }
+
+  depends_on = [ azurerm_subnet.az_subnet_A ]
+}
+
+resource "azurerm_network_interface" "az_interface2" {
+  name                = "azvm-nic-2"
+  location            = local.location
+  resource_group_name = local.resource_group_name
+
+  ip_configuration {
+    name                          = "ipconfig1"
+    subnet_id                     = azurerm_subnet.az_subnet_A.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id = azurerm_public_ip.az_pub_ip2.id
+  }
+
+  depends_on = [ azurerm_subnet.az_subnet_A ]
+}
+
+
+resource "azurerm_public_ip" "az_pub_ip" {
+  name                = "Az_PublicIP_01"
+  resource_group_name = local.resource_group_name
+  location            = local.location
+  allocation_method   = "Static"
+
+  tags = local.Az_tags
+
+  depends_on = [ azurerm_resource_group.AzResourceGr ]
+}
+resource "azurerm_public_ip" "az_pub_ip2" {
+  name                = "Az_PublicIP_02"
+  resource_group_name = local.resource_group_name
+  location            = local.location
+  allocation_method   = "Static"
+
+  tags = local.Az_tags
+
+  depends_on = [ azurerm_resource_group.AzResourceGr ]
+}
+
+resource "azurerm_network_security_group" "az_nsg" {
+  name                = "NSG01"
+  location            = local.location
+  resource_group_name = local.resource_group_name
+
+  security_rule {
+    name                       = "RDP_NSG"
+    priority                   = 200
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "3389"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  tags = local.Az_tags
+
+  depends_on = [ azurerm_resource_group.AzResourceGr ]
+  }
+
+  resource "azurerm_subnet_network_security_group_association" "az_nsg_association" {
+  subnet_id                 = azurerm_subnet.az_subnet_A.id
+  network_security_group_id = azurerm_network_security_group.az_nsg.id
+}
+
+resource "azurerm_windows_virtual_machine" "azvm" {
+  name                = "a1azrapp001"
+  resource_group_name = local.resource_group_name
+  location            = local.location
+  size                = "Standard_D2S_v3"
+  admin_username      = "a1_a1azrapp001"
+  admin_password      = "Arnab@123456123456"
+  network_interface_ids = [
+    azurerm_network_interface.az_interface.id, azurerm_network_interface.az_interface2.id
+  ]
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2019-Datacenter"
+    version   = "latest"
+  }
+
+depends_on = [ azurerm_network_interface.az_interface,
+azurerm_network_interface.az_interface2,
+ azurerm_resource_group.AzResourceGr ]
+
+}
+
+resource "azurerm_managed_disk" "az-datadisk01" {
+  name                 = "${azurerm_windows_virtual_machine.azvm.name}-disk1"
+  location             = local.location
+  resource_group_name  = local.resource_group_name
+  storage_account_type = "Standard_LRS"
+  create_option        = "Empty"
+  disk_size_gb         = 16
+}
+
+resource "azurerm_virtual_machine_data_disk_attachment" "az-datadisk-attacment" {
+  managed_disk_id    = azurerm_managed_disk.az-datadisk01.id
+  virtual_machine_id = azurerm_windows_virtual_machine.azvm.id
+  lun                = "0"
+  caching            = "ReadWrite"
+}
